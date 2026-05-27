@@ -336,7 +336,7 @@ function TaskCard({ task, taskState, phaseIndex }) {
           style={[styles.completeButton, { backgroundColor: colors.border }]}
           onPress={handleComplete}
         >
-          <Text style.completeButtonText}>Mark Complete ✓</Text>
+          <Text style={styles.completeButtonText}>Mark Complete ✓</Text>
         </TouchableOpacity>
       )}
     </View>
