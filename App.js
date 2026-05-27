@@ -1,5 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  SafeAreaView,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  Linking,
+  StatusBar,
+} from 'react-native';
 import { databases, ID } from './lib/appwrite';
 import useTaskState from './useTaskState';
 import seedTasks from './seed_tasks.json';
@@ -116,111 +126,370 @@ async function initializeAppwriteCollections() {
   }
 }
 
+// ─── Formatting helpers ──────────────────────────────────────────
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function formatTime(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatTimeWindow(task) {
+  if (task.target_start && task.target_end) {
+    return `${formatDate(task.target_start)}  •  ${formatTime(task.target_start)} – ${formatTime(task.target_end)}`;
+  }
+  if (task.target_start) {
+    return `${formatDate(task.target_start)}  •  ${formatTime(task.target_start)}`;
+  }
+  if (task.target_end) {
+    return `By ${formatDate(task.target_end)}  •  ${formatTime(task.target_end)}`;
+  }
+  if (task.target_date) {
+    return formatDate(task.target_date);
+  }
+  return '';
+}
+
+// ─── Colour palette by status ────────────────────────────────────
+const STATUS_COLORS = {
+  TODO:        { border: '#3B82F6', bg: '#1E3A5F', badge: '#3B82F6', text: '#93C5FD' },
+  IN_PROGRESS: { border: '#F59E0B', bg: '#422006', badge: '#F59E0B', text: '#FDE68A' },
+  COMPLETE:    { border: '#10B981', bg: '#064E3B', badge: '#10B981', text: '#6EE7B7' },
+  LOCKED:      { border: '#475569', bg: '#1E293B', badge: '#475569', text: '#94A3B8' },
+  SKIPPED:     { border: '#6B7280', bg: '#1F2937', badge: '#6B7280', text: '#9CA3AF' },
+  CONDITIONAL: { border: '#A855F7', bg: '#3B0764', badge: '#A855F7', text: '#D8B4FE' },
+};
+
+const STATUS_LABELS = {
+  TODO: 'To Do',
+  IN_PROGRESS: 'In Progress',
+  COMPLETE: 'Done',
+  LOCKED: '🔒 Locked',
+  SKIPPED: 'Skipped',
+  CONDITIONAL: 'Conditional',
+};
+
+// ─── Phase colour accents ────────────────────────────────────────
+const PHASE_ACCENTS = ['#EF4444', '#F59E0B', '#A855F7', '#10B981'];
+
+// ═════════════════════════════════════════════════════════════════
+//  TaskCard Component
+// ═════════════════════════════════════════════════════════════════
+function TaskCard({ task, taskState, phaseIndex }) {
+  const status = taskState.getEffectiveStatus(task);
+  const locked = status === 'LOCKED';
+  const colors = STATUS_COLORS[status] || STATUS_COLORS.TODO;
+  const subItems = task.metadata?.required_physical_assets;
+  const checks = taskState.subItemChecks[task.id] || [];
+
+  const handlePress = useCallback(() => {
+    if (locked) {
+      const depNames = task.dependencies
+        .map((id) => id.replace('task_', 'Task '))
+        .join(', ');
+      Alert.alert('🔒 Blocked', `Complete ${depNames} first.`);
+      return;
+    }
+    if (status === 'COMPLETE') return;
+    taskState.toggleTaskProgress(task.id);
+  }, [locked, status, task]);
+
+  const handleComplete = useCallback(() => {
+    if (locked) return;
+    taskState.completeTask(task.id);
+  }, [locked, task.id]);
+
+  return (
+    <View style={[styles.taskCard, { borderLeftColor: colors.border, backgroundColor: colors.bg }, locked && styles.taskCardLocked]}>
+      {/* Header row */}
+      <View style={styles.taskHeader}>
+        <TouchableOpacity
+          onPress={handlePress}
+          style={[styles.statusCheckbox, { borderColor: colors.border }]}
+          activeOpacity={0.7}
+        >
+          {status === 'COMPLETE' && <Text style={styles.checkMark}>✓</Text>}
+          {status === 'IN_PROGRESS' && <View style={[styles.progressDot, { backgroundColor: colors.badge }]} />}
+          {status === 'LOCKED' && <Text style={styles.lockIcon}>🔒</Text>}
+        </TouchableOpacity>
+
+        <View style={styles.taskHeaderText}>
+          <Text style={[styles.taskTitle, locked && styles.taskTitleLocked]} numberOfLines={2}>
+            {task.title}
+          </Text>
+          <View style={[styles.statusBadge, { backgroundColor: colors.badge + '22', borderColor: colors.badge }]}>
+            <Text style={[styles.statusBadgeText, { color: colors.text }]}>
+              {STATUS_LABELS[status]}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Time window */}
+      {formatTimeWindow(task) !== '' && (
+        <Text style={styles.timeWindow}>🕐  {formatTimeWindow(task)}</Text>
+      )}
+
+      {/* Alert / description text — EFILE_SERVICE gets high-visibility warning */}
+      {task.alert_text && status !== 'COMPLETE' && !locked && (
+        <View style={[
+          styles.alertBox,
+          task.metadata?.action_type === 'EFILE_SERVICE' && styles.protectiveOrderAlert,
+        ]}>
+          <Text style={[
+            styles.alertText,
+            task.metadata?.action_type === 'EFILE_SERVICE' && styles.protectiveOrderText,
+          ]}>
+            {task.metadata?.action_type === 'EFILE_SERVICE' ? '⚠️ LEGAL COMPLIANCE: ' : ''}
+            {task.alert_text}
+          </Text>
+        </View>
+      )}
+      {task.alert_text && (status === 'COMPLETE' || locked) && (
+        <Text style={[styles.alertText, locked && styles.alertTextLocked]}>{task.alert_text}</Text>
+      )}
+
+      {/* Action steps (for CONDITIONAL / multi-step tasks) */}
+      {task.action_steps && task.action_steps.length > 0 && (
+        <View style={styles.actionStepsContainer}>
+          <Text style={styles.actionStepsLabel}>Action Steps:</Text>
+          {task.action_steps.map((step, i) => (
+            <Text key={i} style={styles.actionStep}>
+              {i + 1}. {step}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {/* Deep-link buttons (phone / email) */}
+      <View style={styles.deepLinkRow}>
+        {task.metadata?.phone && (
+          <TouchableOpacity
+            style={styles.deepLinkButton}
+            onPress={() => Linking.openURL(`tel:${task.metadata.phone.replace(/[^0-9+]/g, '')}`)}
+          >
+            <Text style={styles.deepLinkText}>📞  {task.metadata.phone}</Text>
+          </TouchableOpacity>
+        )}
+        {task.metadata?.portal_url && (
+          <TouchableOpacity
+            style={[styles.deepLinkButton, styles.eFileButton]}
+            onPress={() => Linking.openURL(task.metadata.portal_url)}
+          >
+            <Text style={styles.deepLinkText}>🔐  Open E-File Portal</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Location (for court appearances) */}
+      {task.metadata?.address && (
+        <TouchableOpacity
+          style={styles.locationRow}
+          onPress={() => Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(task.metadata.address)}`)}
+        >
+          <Text style={styles.locationText}>
+            📍  {task.metadata.address}{task.metadata.room ? `  •  ${task.metadata.room}` : ''}
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Physical assets sub-checklist */}
+      {subItems && subItems.length > 0 && (
+        <View style={styles.subItemsContainer}>
+          <Text style={styles.subItemsLabel}>Required Assets:</Text>
+          {subItems.map((item, idx) => (
+            <TouchableOpacity
+              key={idx}
+              style={styles.subItemRow}
+              onPress={() => taskState.toggleSubItem(task.id, idx)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.subItemCheck, checks[idx] && styles.subItemChecked]}>
+                {checks[idx] && <Text style={styles.subItemCheckMark}>✓</Text>}
+              </View>
+              <Text style={[styles.subItemText, checks[idx] && styles.subItemTextDone]}>
+                {item}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {/* Dependency note */}
+      {task.dependencies && task.dependencies.length > 0 && (
+        <Text style={styles.depNote}>
+          ⛓  Depends on: {task.dependencies.map((d) => d.replace('task_', '#')).join(', ')}
+        </Text>
+      )}
+
+      {/* Complete button (only for non-locked, non-complete tasks) */}
+      {status !== 'COMPLETE' && status !== 'LOCKED' && status !== 'SKIPPED' && (
+        <TouchableOpacity
+          style={[styles.completeButton, { backgroundColor: colors.border }]}
+          onPress={handleComplete}
+        >
+          <Text style={styles.completeButtonText}>Mark Complete ✓</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════
+//  App Root
+// ═════════════════════════════════════════════════════════════════
 export default function App() {
-  const [taskData, setTaskData] = useState(seedTasks);
+  const [taskData] = useState(seedTasks);
   const taskState = useTaskState(taskData);
+  const [expandedPhases, setExpandedPhases] = useState({});
+  const [showSetup, setShowSetup] = useState(false);
 
   useEffect(() => {
     console.log('📱 SmartTodo app loaded');
     console.log('✅ State management ready');
     console.log('📋 Seed tasks loaded:', seedTasks.length, 'phases');
+    // Auto-expand all phases on first load
+    const phaseMap = {};
+    seedTasks.forEach((p) => { phaseMap[p.phaseId] = true; });
+    setExpandedPhases(phaseMap);
   }, []);
+
+  const togglePhase = useCallback((phaseId) => {
+    setExpandedPhases((prev) => ({ ...prev, [phaseId]: !prev[phaseId] }));
+  }, []);
+
+  const filteredPhases = taskState.getFilteredTasks();
+  const todayTasks = taskState.getTodaysPriorityTasks();
+  const progress = taskState.getCaseProgress();
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView}>
-        {/* Header */}
+      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+
+        {/* ── Header ──────────────────────────────────────────── */}
         <View style={styles.header}>
-          <Text style={styles.title}>SmartTodo</Text>
-          <Text style={styles.subtitle}>Litigation Calendar Demo</Text>
-          <Text style={styles.progress}>Progress: {taskState.getCaseProgress()}%</Text>
-        </View>
+          <Text style={styles.title}>⚖️  SmartTodo</Text>
+          <Text style={styles.subtitle}>Litigation Calendar  •  Smith v. Jones</Text>
 
-        {/* Setup Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>⚙️ Setup Instructions</Text>
-          
-          <View style={styles.setupCard}>
-            <Text style={styles.setupStep}>1. Update DATABASE_ID in App.js line 8</Text>
-            <Text style={styles.setupStep}>2. Create 8 collections in Appwrite (see docs)</Text>
-            <Text style={styles.setupStep}>3. Tap button below to initialize</Text>
-          </View>
-
-          <TouchableOpacity style={styles.initButton} onPress={initializeAppwriteCollections}>
-            <Text style={styles.initButtonText}>⚙️ Initialize Appwrite Database</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Priority Tasks */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>🔴 Today's Priority Tasks</Text>
-          {taskState.getTodaysPriorityTasks().length === 0 ? (
-            <Text style={styles.emptyText}>No priority tasks today</Text>
-          ) : (
-            taskState.getTodaysPriorityTasks().map((task) => (
-              <View key={task.id} style={styles.taskCard}>
-                <Text style={styles.taskTitle}>{task.title}</Text>
-                <Text style={styles.taskSubtitle}>{task.alert_text}</Text>
-              </View>
-            ))
-          )}
-        </View>
-
-        {/* Phases Overview */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>📊 Phases</Text>
-          {taskState.getFilteredTasks().map((phase) => (
-            <View key={phase.phaseId} style={styles.phaseCard}>
-              <Text style={styles.phaseName}>{phase.phase}</Text>
-              <Text style={styles.phaseCount}>{phase.tasks.length} tasks</Text>
+          {/* Progress bar */}
+          <View style={styles.progressContainer}>
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
             </View>
-          ))}
+            <Text style={styles.progressLabel}>{progress}% complete</Text>
+          </View>
         </View>
 
-        {/* Scenario Control */}
+        {/* ── Today's Priority Tasks (above the fold) ─────────── */}
+        {todayTasks.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>🔴  Today's Priority Actions</Text>
+            {todayTasks.map((task) => (
+              <TaskCard key={task.id} task={task} taskState={taskState} phaseIndex={0} />
+            ))}
+          </View>
+        )}
+
+        {/* ── Scenario Control ────────────────────────────────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>⚡ Conditional Scenarios</Text>
-          <Text style={styles.scenarioStatus}>
-            Current: {taskState.globalState.galveston_order_signed ? '✓ Order Signed' : '✗ Order Pending'}
-          </Text>
+          <Text style={styles.sectionTitle}>⚡  Galveston Order Status</Text>
+          <View style={styles.scenarioRow}>
+            <TouchableOpacity
+              style={[
+                styles.scenarioChip,
+                taskState.globalState.galveston_order_signed && styles.scenarioChipActive,
+              ]}
+              onPress={() => taskState.receiveGalvestonOrder()}
+            >
+              <Text style={styles.scenarioChipText}>✓  Order Signed</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.scenarioButton, taskState.globalState.galveston_order_signed && styles.scenarioButtonActive]}
-            onPress={() => taskState.receiveGalvestonOrder()}
-          >
-            <Text style={styles.scenarioButtonText}>✓ Scenario A: Order Signed</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.scenarioButton, !taskState.globalState.galveston_order_signed && styles.scenarioButtonActive]}
-            onPress={() =>
-              taskState.setGlobalState((prev) => ({
-                ...prev,
-                galveston_order_signed: false,
-              }))
-            }
-          >
-            <Text style={styles.scenarioButtonText}>✗ Scenario B: Order Pending</Text>
-          </TouchableOpacity>
-
+            <TouchableOpacity
+              style={[
+                styles.scenarioChip,
+                !taskState.globalState.galveston_order_signed && styles.scenarioChipActive,
+              ]}
+              onPress={() =>
+                taskState.setGlobalState((prev) => ({ ...prev, galveston_order_signed: false }))
+              }
+            >
+              <Text style={styles.scenarioChipText}>✗  Still Pending</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={styles.scenarioExplain}>
             {taskState.globalState.galveston_order_signed
-              ? '→ Tasks 5 & 6 hidden, Task 7 visible'
-              : '→ Tasks 5 & 6 visible (polling), Task 8 visible'}
+              ? '→ Scenario A active: Tasks 5 & 6 auto-skipped, Task 7 unlocked'
+              : '→ Scenario B active: Tasks 5 & 6 polling, Task 8 ready when date arrives'}
           </Text>
         </View>
 
-        {/* Test Data Info */}
-        <View style={styles.infoCard}>
-          <Text style={styles.infoTitle}>📋 Test Data Loaded</Text>
-          <Text style={styles.infoText}>Litigation Calendar: 9 tasks across 4 phases</Text>
-          <Text style={styles.infoText}>Ready for Appwrite integration</Text>
-        </View>
+        {/* ── Phase Accordion ─────────────────────────────────── */}
+        {filteredPhases.map((phase, phaseIdx) => (
+          <View key={phase.phaseId} style={styles.section}>
+            <TouchableOpacity
+              style={styles.phaseHeader}
+              onPress={() => togglePhase(phase.phaseId)}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.phaseAccent, { backgroundColor: PHASE_ACCENTS[phaseIdx % PHASE_ACCENTS.length] }]} />
+              <View style={styles.phaseHeaderText}>
+                <Text style={styles.phaseName}>{phase.phase}</Text>
+                <Text style={styles.phaseCount}>
+                  {phase.tasks.filter((t) => taskState.getEffectiveStatus(t) === 'COMPLETE').length}/{phase.tasks.length} done
+                </Text>
+              </View>
+              <Text style={styles.chevron}>
+                {expandedPhases[phase.phaseId] ? '▼' : '▶'}
+              </Text>
+            </TouchableOpacity>
+
+            {expandedPhases[phase.phaseId] &&
+              phase.tasks.map((task) => (
+                <TaskCard key={task.id} task={task} taskState={taskState} phaseIndex={phaseIdx} />
+              ))}
+          </View>
+        ))}
+
+        {/* ── Setup Section (collapsed by default) ────────────── */}
+        <TouchableOpacity
+          style={styles.setupToggle}
+          onPress={() => setShowSetup(!showSetup)}
+        >
+          <Text style={styles.setupToggleText}>
+            {showSetup ? '▼' : '▶'}  ⚙️ Appwrite Setup
+          </Text>
+        </TouchableOpacity>
+
+        {showSetup && (
+          <View style={styles.setupCard}>
+            <Text style={styles.setupStep}>1. Update DATABASE_ID in App.js line 17</Text>
+            <Text style={styles.setupStep}>2. Update Project ID in lib/appwrite.js</Text>
+            <Text style={styles.setupStep}>3. Create collections: cases, phases, tasks, task_dependencies</Text>
+            <Text style={styles.setupStep}>4. Tap button below to seed data</Text>
+            <TouchableOpacity style={styles.initButton} onPress={initializeAppwriteCollections}>
+              <Text style={styles.initButtonText}>⚙️  Initialize Appwrite Database</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Bottom spacer */}
+        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+
+
+// ═════════════════════════════════════════════════════════════════
+//  Styles
+// ═════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -229,147 +498,399 @@ const styles = StyleSheet.create({
   scrollView: {
     padding: 16,
   },
+
+  // ── Header ───────────────────────────────
   header: {
     marginBottom: 24,
+    paddingTop: 8,
   },
   title: {
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#FFF',
-    marginBottom: 4,
+    fontWeight: '800',
+    color: '#F8FAFC',
+    letterSpacing: 0.5,
+    marginBottom: 2,
   },
   subtitle: {
-    fontSize: 14,
-    color: '#CBD5E1',
-    marginBottom: 8,
+    fontSize: 13,
+    color: '#94A3B8',
+    marginBottom: 16,
   },
-  progress: {
-    fontSize: 14,
-    fontWeight: '600',
+  progressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  progressBarBg: {
+    flex: 1,
+    height: 8,
+    backgroundColor: '#1E293B',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#3B82F6',
+    borderRadius: 4,
+  },
+  progressLabel: {
+    fontSize: 12,
+    fontWeight: '700',
     color: '#3B82F6',
+    minWidth: 80,
+    textAlign: 'right',
   },
+
+  // ── Sections ─────────────────────────────
   section: {
     marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#F1F5F9',
     marginBottom: 12,
+    letterSpacing: 0.3,
   },
-  setupCard: {
-    backgroundColor: '#1E293B',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  setupStep: {
-    fontSize: 12,
-    color: '#CBD5E1',
-    marginBottom: 6,
-    lineHeight: 16,
-  },
-  initButton: {
-    backgroundColor: '#1E40AF',
-    padding: 16,
-    borderRadius: 8,
+
+  // ── Phase Accordion ──────────────────────
+  phaseHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#1E293B',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 8,
   },
-  initButtonText: {
-    color: '#FFF',
+  phaseAccent: {
+    width: 4,
+    height: 32,
+    borderRadius: 2,
+    marginRight: 12,
+  },
+  phaseHeaderText: {
+    flex: 1,
+  },
+  phaseName: {
     fontSize: 14,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    color: '#F1F5F9',
+    marginBottom: 2,
   },
-  emptyText: {
-    color: '#94A3B8',
+  phaseCount: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  chevron: {
     fontSize: 12,
-    textAlign: 'center',
-    padding: 16,
+    color: '#64748B',
+    marginLeft: 8,
   },
+
+  // ── Task Card ────────────────────────────
   taskCard: {
     backgroundColor: '#1E293B',
     borderLeftWidth: 4,
-    borderLeftColor: '#EF4444',
-    padding: 12,
-    borderRadius: 6,
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 10,
+    marginLeft: 8,
+  },
+  taskCardLocked: {
+    opacity: 0.55,
+  },
+  taskHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     marginBottom: 8,
+  },
+  statusCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    marginTop: 1,
+  },
+  checkMark: {
+    color: '#10B981',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  progressDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  lockIcon: {
+    fontSize: 11,
+  },
+  taskHeaderText: {
+    flex: 1,
+    flexDirection: 'column',
   },
   taskTitle: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#FFF',
-    marginBottom: 4,
+    fontWeight: '700',
+    color: '#F1F5F9',
+    lineHeight: 18,
+    marginBottom: 6,
   },
-  taskSubtitle: {
+  taskTitleLocked: {
+    color: '#64748B',
+  },
+  statusBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  statusBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+
+  // ── Time / Alert ─────────────────────────
+  timeWindow: {
     fontSize: 11,
-    color: '#94A3B8',
-    lineHeight: 14,
-  },
-  phaseCard: {
-    backgroundColor: '#1E293B',
-    padding: 12,
-    borderRadius: 6,
-    marginBottom: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  phaseName: {
-    fontSize: 13,
+    color: '#93C5FD',
+    marginBottom: 6,
     fontWeight: '600',
-    color: '#FFF',
-    flex: 1,
   },
-  phaseCount: {
+  alertText: {
     fontSize: 12,
-    color: '#94A3B8',
-  },
-  scenarioStatus: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FCD34D',
-    marginBottom: 12,
-  },
-  scenarioButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: '#334155',
-    borderRadius: 6,
+    color: '#CBD5E1',
+    lineHeight: 17,
     marginBottom: 8,
+  },
+  alertTextLocked: {
+    color: '#475569',
+  },
+
+  // ── Action Steps ─────────────────────────
+  actionStepsContainer: {
+    backgroundColor: '#0F172A',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+  },
+  actionStepsLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  actionStep: {
+    fontSize: 12,
+    color: '#CBD5E1',
+    lineHeight: 18,
+    marginBottom: 3,
+    paddingLeft: 4,
+  },
+
+  // ── Deep Links (phone / email) ───────────
+  deepLinkRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  deepLinkButton: {
+    backgroundColor: '#164E63',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  emailButton: {
+    backgroundColor: '#4C1D95',
+  },
+  deepLinkText: {
+    color: '#E0F2FE',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // ── Location ─────────────────────────────
+  locationRow: {
+    backgroundColor: '#1A2332',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  locationText: {
+    fontSize: 12,
+    color: '#93C5FD',
+    lineHeight: 16,
+  },
+
+  // ── Sub-Item Checklist ───────────────────
+  subItemsContainer: {
+    backgroundColor: '#0F172A',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+  },
+  subItemsLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  subItemRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  subItemCheck: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: '#475569',
+    marginRight: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  subItemChecked: {
+    backgroundColor: '#10B981',
+    borderColor: '#10B981',
+  },
+  subItemCheckMark: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  subItemText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#CBD5E1',
+    lineHeight: 17,
+  },
+  subItemTextDone: {
+    textDecorationLine: 'line-through',
+    color: '#64748B',
+  },
+
+  // ── Dependency note ──────────────────────
+  depNote: {
+    fontSize: 10,
+    color: '#64748B',
+    fontStyle: 'italic',
+    marginBottom: 8,
+  },
+
+  // ── Complete Button ──────────────────────
+  completeButton: {
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  completeButtonText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── Scenario Control ─────────────────────
+  scenarioRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  scenarioChip: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: '#1E293B',
+    borderRadius: 10,
+    alignItems: 'center',
     borderWidth: 2,
     borderColor: 'transparent',
   },
-  scenarioButtonActive: {
-    backgroundColor: '#1E40AF',
+  scenarioChipActive: {
+    backgroundColor: '#1E3A5F',
     borderColor: '#3B82F6',
   },
-  scenarioButtonText: {
+  scenarioChipText: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#FFF',
-    textAlign: 'center',
+    fontWeight: '700',
+    color: '#F1F5F9',
   },
   scenarioExplain: {
     fontSize: 11,
     color: '#FCD34D',
-    marginTop: 8,
     fontStyle: 'italic',
   },
-  infoCard: {
-    backgroundColor: '#1E293B',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 32,
+
+  // ── Setup ────────────────────────────────
+  setupToggle: {
+    paddingVertical: 12,
+    marginBottom: 8,
   },
-  infoTitle: {
+  setupToggleText: {
     fontSize: 13,
-    fontWeight: 'bold',
-    color: '#FFF',
-    marginBottom: 6,
+    color: '#64748B',
+    fontWeight: '600',
   },
-  infoText: {
-    fontSize: 11,
+  setupCard: {
+    backgroundColor: '#1E293B',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  setupStep: {
+    fontSize: 12,
     color: '#94A3B8',
-    marginBottom: 4,
+    marginBottom: 8,
+    lineHeight: 17,
+  },
+  initButton: {
+    backgroundColor: '#1E40AF',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  initButtonText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── Alert Box ────────────────────────────
+  alertBox: {
+    marginTop: 4,
+    marginBottom: 8,
+    padding: 10,
+    backgroundColor: '#1A2332',
+    borderRadius: 6,
+    borderLeftWidth: 3,
+    borderLeftColor: '#F59E0B',
+  },
+
+  // ── Protective Order / eFile Warning ─────
+  protectiveOrderAlert: {
+    backgroundColor: '#2D1215',
+    borderLeftColor: '#EF4444',
+    borderWidth: 1,
+    borderColor: '#7F1D1D',
+  },
+  protectiveOrderText: {
+    color: '#FCA5A5',
+    fontWeight: 'bold',
+  },
+
+  // ── eFile Portal Button ──────────────────
+  eFileButton: {
+    backgroundColor: '#7F1D1D',
   },
 });

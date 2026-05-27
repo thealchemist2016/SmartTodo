@@ -1,0 +1,190 @@
+[
+  {
+    "phaseId": "phase_001",
+    "phase_number": 1,
+    "phase": "Phase 1: High-Priority Triggers",
+    "tasks": [
+      {
+        "id": "task_001",
+        "title": "Call the Galveston County Court Coordinator (212th District)",
+        "target_start": "2026-05-28T09:00:00-05:00",
+        "target_end": "2026-05-28T11:00:00-05:00",
+        "metadata": {
+          "action_type": "CALL",
+          "phone": "(409) 766-2240",
+          "cause_no": "25-FD-1502"
+        },
+        "alert_text": "Call 212th Coordinator for Cause No. 25-FD-1502. Ask if Judge Grady will sign the Clarification Order on operation of law (written submission) to unmask the blank 'Minors' section before the June 24 Brazoria deadline.",
+        "status": "TODO",
+        "is_high_priority": true,
+        "is_conditional": false,
+        "requires_artifact": false,
+        "dependencies": []
+      },
+      {
+        "id": "task_002",
+        "title": "Call the Brazoria County Court Coordinator (461st District)",
+        "target_start": "2026-05-28T11:00:00-05:00",
+        "target_end": "2026-05-28T12:00:00-05:00",
+        "metadata": {
+          "action_type": "CALL",
+          "phone": "(979) 864-1261",
+          "note": "Request the 461st District Coordinator",
+          "cause_no": "135860-F"
+        },
+        "alert_text": "Call 461st Coordinator for Cause No. 135860-F. Confirm receipt of the Motion for Continuance, Formal Objections, and Notice of Galveston Proceedings. Request that the Judge withhold signing the Petitioner's 26-page draft order.",
+        "status": "TODO",
+        "is_high_priority": true,
+        "is_conditional": false,
+        "requires_artifact": false,
+        "dependencies": ["task_001"]
+      },
+      {
+        "id": "task_003",
+        "title": "Serve Notice of Hearing via Texas E-File System",
+        "target_end": "2026-05-28T17:00:00-05:00",
+        "metadata": {
+          "action_type": "EFILE_SERVICE",
+          "portal_url": "https://efile.txcourts.gov",
+          "required_asset": "Notice of Hearing PDF",
+          "verification": "Official eFile Service Receipt"
+        },
+        "alert_text": "DO NOT EMAIL DIRECTLY. Log into the Texas E-File portal. Upload the June 24 Notice of Hearing, add her as a service contact via the system interface, and submit. Download and save the official Service Receipt!",
+        "status": "TODO",
+        "is_high_priority": true,
+        "is_conditional": false,
+        "requires_artifact": true,
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "phaseId": "phase_002",
+    "phase_number": 2,
+    "phase": "Phase 2: Tracking & System Polling",
+    "tasks": [
+      {
+        "id": "task_004",
+        "title": "Check Portal for 'Filing Accepted' Statuses",
+        "target_date": "2026-05-29",
+        "metadata": {
+          "action_type": "review",
+          "portal_url": "Texas E-Filing portal",
+          "verification_targets": ["Galveston Clerk", "Brazoria Clerk"]
+        },
+        "alert_text": "Log into the Texas E-Filing portal. Verify that both the Galveston Clerk and Brazoria Clerk have officially approved and file-stamped all new documents.",
+        "status": "TODO",
+        "is_high_priority": false,
+        "is_conditional": false,
+        "requires_artifact": false,
+        "dependencies": []
+      },
+      {
+        "id": "task_005",
+        "title": "Weekly Status Check-In (Galveston)",
+        "target_date": "2026-06-04",
+        "metadata": {
+          "action_type": "CALL",
+          "phone": "(409) 766-2240"
+        },
+        "alert_text": "Polled Galveston 1 week ago. Call back to check if Judge Grady has reviewed the proposed Clarification Order on the pleadings.",
+        "status": "TODO",
+        "is_high_priority": false,
+        "is_conditional": false,
+        "requires_artifact": false,
+        "dependencies": [],
+        "conditional_skip_if": "galveston_order_signed == true"
+      },
+      {
+        "id": "task_006",
+        "title": "Mid-Point Status Check-In (Galveston)",
+        "target_date": "2026-06-11",
+        "metadata": {
+          "action_type": "CALL",
+          "phone": "(409) 766-2240"
+        },
+        "alert_text": "Emphasize that the Brazoria court deadline is now less than two weeks away.",
+        "status": "TODO",
+        "is_high_priority": false,
+        "is_conditional": false,
+        "requires_artifact": false,
+        "dependencies": ["task_005"],
+        "conditional_skip_if": "galveston_order_signed == true"
+      }
+    ]
+  },
+  {
+    "phaseId": "phase_003",
+    "phase_number": 3,
+    "phase": "Phase 3: The Fork in the Road (Conditional Logic)",
+    "tasks": [
+      {
+        "id": "task_007",
+        "title": "[SCENARIO A] Galveston Order is Signed",
+        "activation_condition": "galveston_order_signed == true",
+        "action_steps": [
+          "Download signed, file-marked copy from Galveston portal.",
+          "Save as Galveston_Signed_Clarification_Order.pdf.",
+          "E-file a brief 'Notice of Filing Out-of-County Order' in Brazoria County.",
+          "Call Brazoria coordinator to confirm review status."
+        ],
+        "metadata": {
+          "action_type": "multi_step"
+        },
+        "alert_text": "Galveston Order is signed! Execute all Scenario A steps: download, save, e-file in Brazoria, and call coordinator.",
+        "status": "CONDITIONAL",
+        "is_high_priority": false,
+        "is_conditional": true,
+        "requires_artifact": true,
+        "dependencies": []
+      },
+      {
+        "id": "task_008",
+        "title": "[SCENARIO B] Prepare for Motion for Continuance Ruling",
+        "activation_condition": "galveston_order_signed == false && current_date >= 2026-06-15",
+        "action_steps": [
+          "Call Brazoria coordinator regarding pending Motion for Continuance.",
+          "Ask if the Judge will rule from the bench prior to June 24th or if appearance is mandatory."
+        ],
+        "metadata": {
+          "action_type": "CALL",
+          "phone": "(979) 864-1261"
+        },
+        "alert_text": "Galveston still pending. Call Brazoria coordinator about the Motion for Continuance ruling timeline.",
+        "status": "CONDITIONAL",
+        "is_high_priority": false,
+        "is_conditional": true,
+        "requires_artifact": false,
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "phaseId": "phase_004",
+    "phase_number": 4,
+    "phase": "Phase 4: The Hard Target",
+    "tasks": [
+      {
+        "id": "task_009",
+        "title": "Hearing Date – 461st District Court (Brazoria)",
+        "target_start": "2026-06-24T09:00:00-05:00",
+        "metadata": {
+          "action_type": "APPEARANCE",
+          "address": "111 E. Locust, Angleton, Texas 77515",
+          "room": "4th Floor, Room 452.010",
+          "required_physical_assets": [
+            "Printed copy of Motion for New Trial and Formal Objections",
+            "Printed eFile Service Receipt proving service on Jessica (name, registered email, transmission timestamp)",
+            "Signed Galveston Order OR file-stamped Galveston pending motion copy"
+          ]
+        },
+        "alert_text": "HEARING DAY. 461st District Court, Brazoria County. 9:00 AM. Bring all physical assets.",
+        "status": "TODO",
+        "is_high_priority": true,
+        "is_conditional": false,
+        "requires_artifact": true,
+        "dependencies": ["task_003"]
+      }
+    ]
+  }
+]
