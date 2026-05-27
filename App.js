@@ -103,12 +103,8 @@ async function initializeAppwriteCollections() {
               'task_dependencies',
               ID.unique(),
               {
-                caseId: 'litigation_case_001',
                 taskId: task.id,
                 dependsOnTaskId: depId,
-                dependencyType: 'hard',
-                triggerCondition: 'task_completed',
-                notes: `${task.id} waits for ${depId}`,
               }
             );
           }
@@ -116,46 +112,34 @@ async function initializeAppwriteCollections() {
       }
     }
     console.log('✓ Dependencies created');
-
-    Alert.alert('✅ Success!', 'Appwrite collections initialized!\n\nReload the app to see tasks.');
-    return true;
+    Alert.alert('Success', 'Database initialized with litigation calendar.');
   } catch (error) {
-    console.error('❌ Error:', error);
-    Alert.alert('Error', `Failed to initialize: ${error.message}`);
-    return false;
+    console.error('Initialization failed:', error);
+    Alert.alert('Error', 'Failed to initialize database. Check console.');
   }
 }
 
-// ─── Formatting helpers ──────────────────────────────────────────
-function formatDate(dateStr) {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-}
-
-function formatTime(dateStr) {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-}
-
+// ─────────────────────────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────────────────────────
 function formatTimeWindow(task) {
   if (task.target_start && task.target_end) {
-    return `${formatDate(task.target_start)}  •  ${formatTime(task.target_start)} – ${formatTime(task.target_end)}`;
-  }
-  if (task.target_start) {
-    return `${formatDate(task.target_start)}  •  ${formatTime(task.target_start)}`;
-  }
-  if (task.target_end) {
-    return `By ${formatDate(task.target_end)}  •  ${formatTime(task.target_end)}`;
+    const start = new Date(task.target_start);
+    const end = new Date(task.target_end);
+    const dateStr = start.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const startTime = start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const endTime = end.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return `${dateStr}  •  ${startTime} – ${endTime}`;
   }
   if (task.target_date) {
-    return formatDate(task.target_date);
+    return new Date(task.target_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  if (task.target_start) {
+      return new Date(task.target_start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
   return '';
 }
 
-// ─── Colour palette by status ────────────────────────────────────
 const STATUS_COLORS = {
   TODO:        { border: '#3B82F6', bg: '#1E3A5F', badge: '#3B82F6', text: '#93C5FD' },
   IN_PROGRESS: { border: '#F59E0B', bg: '#422006', badge: '#F59E0B', text: '#FDE68A' },
@@ -204,6 +188,8 @@ function TaskCard({ task, taskState, phaseIndex }) {
     taskState.completeTask(task.id);
   }, [locked, task.id]);
 
+  const isLegalCompliance = task.metadata?.action_type === 'EFILE_SERVICE' || task.metadata?.action_type === 'EMAIL';
+
   return (
     <View style={[styles.taskCard, { borderLeftColor: colors.border, backgroundColor: colors.bg }, locked && styles.taskCardLocked]}>
       {/* Header row */}
@@ -222,10 +208,19 @@ function TaskCard({ task, taskState, phaseIndex }) {
           <Text style={[styles.taskTitle, locked && styles.taskTitleLocked]} numberOfLines={2}>
             {task.title}
           </Text>
-          <View style={[styles.statusBadge, { backgroundColor: colors.badge + '22', borderColor: colors.badge }]}>
-            <Text style={[styles.statusBadgeText, { color: colors.text }]}>
-              {STATUS_LABELS[status]}
-            </Text>
+          <View style={styles.badgeRow}>
+            <View style={[styles.statusBadge, { backgroundColor: colors.badge + '22', borderColor: colors.badge }]}>
+              <Text style={[styles.statusBadgeText, { color: colors.text }]}>
+                {STATUS_LABELS[status]}
+              </Text>
+            </View>
+            {task.requires_artifact && (
+              <View style={[styles.statusBadge, styles.artifactBadge]}>
+                <Text style={[styles.statusBadgeText, styles.artifactBadgeText]}>
+                  📸 Artifact Required
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       </View>
@@ -235,17 +230,17 @@ function TaskCard({ task, taskState, phaseIndex }) {
         <Text style={styles.timeWindow}>🕐  {formatTimeWindow(task)}</Text>
       )}
 
-      {/* Alert / description text — EFILE_SERVICE gets high-visibility warning */}
+      {/* Alert / description text — Legal actions get high-visibility warning */}
       {task.alert_text && status !== 'COMPLETE' && !locked && (
         <View style={[
           styles.alertBox,
-          task.metadata?.action_type === 'EFILE_SERVICE' && styles.protectiveOrderAlert,
+          isLegalCompliance && styles.protectiveOrderAlert,
         ]}>
           <Text style={[
             styles.alertText,
-            task.metadata?.action_type === 'EFILE_SERVICE' && styles.protectiveOrderText,
+            isLegalCompliance && styles.protectiveOrderText,
           ]}>
-            {task.metadata?.action_type === 'EFILE_SERVICE' ? '⚠️ LEGAL COMPLIANCE: ' : ''}
+            {isLegalCompliance ? '⚠️ LEGAL COMPLIANCE: ' : ''}
             {task.alert_text}
           </Text>
         </View>
@@ -274,6 +269,14 @@ function TaskCard({ task, taskState, phaseIndex }) {
             onPress={() => Linking.openURL(`tel:${task.metadata.phone.replace(/[^0-9+]/g, '')}`)}
           >
             <Text style={styles.deepLinkText}>📞  {task.metadata.phone}</Text>
+          </TouchableOpacity>
+        )}
+        {task.metadata?.recipient && task.metadata?.action_type === 'EMAIL' && (
+          <TouchableOpacity
+            style={[styles.deepLinkButton, styles.emailButton]}
+            onPress={() => Linking.openURL(`mailto:${task.metadata.recipient}`)}
+          >
+            <Text style={styles.deepLinkText}>📧  Send Service Email</Text>
           </TouchableOpacity>
         )}
         {task.metadata?.portal_url && (
@@ -333,7 +336,7 @@ function TaskCard({ task, taskState, phaseIndex }) {
           style={[styles.completeButton, { backgroundColor: colors.border }]}
           onPress={handleComplete}
         >
-          <Text style={styles.completeButtonText}>Mark Complete ✓</Text>
+          <Text style.completeButtonText}>Mark Complete ✓</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -349,35 +352,27 @@ export default function App() {
   const [expandedPhases, setExpandedPhases] = useState({});
   const [showSetup, setShowSetup] = useState(false);
 
+  // Initial expand: Phase 1
   useEffect(() => {
-    console.log('📱 SmartTodo app loaded');
-    console.log('✅ State management ready');
-    console.log('📋 Seed tasks loaded:', seedTasks.length, 'phases');
-    // Auto-expand all phases on first load
-    const phaseMap = {};
-    seedTasks.forEach((p) => { phaseMap[p.phaseId] = true; });
-    setExpandedPhases(phaseMap);
+    setExpandedPhases({ phase_001: true });
   }, []);
 
-  const togglePhase = useCallback((phaseId) => {
-    setExpandedPhases((prev) => ({ ...prev, [phaseId]: !prev[phaseId] }));
-  }, []);
+  const togglePhase = (id) => {
+    setExpandedPhases((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
-  const filteredPhases = taskState.getFilteredTasks();
-  const todayTasks = taskState.getTodaysPriorityTasks();
   const progress = taskState.getCaseProgress();
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+      <StatusBar barStyle="light-content" />
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
 
-        {/* ── Header ──────────────────────────────────────────── */}
+        {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.title}>⚖️  SmartTodo</Text>
+          <Text style={styles.title}>⚖️ SmartTodo</Text>
           <Text style={styles.subtitle}>Litigation Calendar  •  Smith v. Jones</Text>
 
-          {/* Progress bar */}
           <View style={styles.progressContainer}>
             <View style={styles.progressBarBg}>
               <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
@@ -386,51 +381,32 @@ export default function App() {
           </View>
         </View>
 
-        {/* ── Today's Priority Tasks (above the fold) ─────────── */}
-        {todayTasks.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>🔴  Today's Priority Actions</Text>
-            {todayTasks.map((task) => (
-              <TaskCard key={task.id} task={task} taskState={taskState} phaseIndex={0} />
-            ))}
-          </View>
-        )}
-
-        {/* ── Scenario Control ────────────────────────────────── */}
+        {/* ── Scenario Controls (Simulating Galveston) ───────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>⚡  Galveston Order Status</Text>
+          <Text style={styles.sectionTitle}>⚡ Galveston Order Status</Text>
           <View style={styles.scenarioRow}>
             <TouchableOpacity
-              style={[
-                styles.scenarioChip,
-                taskState.globalState.galveston_order_signed && styles.scenarioChipActive,
-              ]}
-              onPress={() => taskState.receiveGalvestonOrder()}
+              style={[styles.scenarioChip, taskState.globalState.galveston_order_signed && styles.scenarioChipActive]}
+              onPress={taskState.receiveGalvestonOrder}
             >
-              <Text style={styles.scenarioChipText}>✓  Order Signed</Text>
+              <Text style={styles.scenarioChipText}>✓ Order Signed</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
-              style={[
-                styles.scenarioChip,
-                !taskState.globalState.galveston_order_signed && styles.scenarioChipActive,
-              ]}
-              onPress={() =>
-                taskState.setGlobalState((prev) => ({ ...prev, galveston_order_signed: false }))
-              }
+              style={[styles.scenarioChip, !taskState.globalState.galveston_order_signed && styles.scenarioChipActive]}
+              onPress={() => taskState.setGlobalState(prev => ({...prev, galveston_order_signed: false}))}
             >
-              <Text style={styles.scenarioChipText}>✗  Still Pending</Text>
+              <Text style={styles.scenarioChipText}>✘ Still Pending</Text>
             </TouchableOpacity>
           </View>
           <Text style={styles.scenarioExplain}>
             {taskState.globalState.galveston_order_signed
-              ? '→ Scenario A active: Tasks 5 & 6 auto-skipped, Task 7 unlocked'
+              ? '→ Scenario A active: Prepare to file in Brazoria'
               : '→ Scenario B active: Tasks 5 & 6 polling, Task 8 ready when date arrives'}
           </Text>
         </View>
 
-        {/* ── Phase Accordion ─────────────────────────────────── */}
-        {filteredPhases.map((phase, phaseIdx) => (
+        {/* ── Phases ─────────────────────────────────────────── */}
+        {taskState.getFilteredTasks().map((phase, phaseIdx) => (
           <View key={phase.phaseId} style={styles.section}>
             <TouchableOpacity
               style={styles.phaseHeader}
@@ -640,6 +616,10 @@ const styles = StyleSheet.create({
   },
   taskTitleLocked: {
     color: '#64748B',
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    gap: 8,
   },
   statusBadge: {
     alignSelf: 'flex-start',
@@ -892,5 +872,14 @@ const styles = StyleSheet.create({
   // ── eFile Portal Button ──────────────────
   eFileButton: {
     backgroundColor: '#7F1D1D',
+  },
+
+  // ── Artifact Badge ───────────────────────
+  artifactBadge: {
+    backgroundColor: '#7F1D1D22',
+    borderColor: '#FCA5A5',
+  },
+  artifactBadgeText: {
+    color: '#FCA5A5',
   },
 });
