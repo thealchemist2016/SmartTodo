@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "appwrite": "^25.0.0",
-    "expo": "~54.0.33",
+    "expo": "~56.0.5",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
     "react-dom": "19.1.0",
