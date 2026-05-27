@@ -332,12 +332,12 @@ function TaskCard({ task, taskState, phaseIndex }) {
 
       {/* Complete button (only for non-locked, non-complete tasks) */}
       {status !== 'COMPLETE' && status !== 'LOCKED' && status !== 'SKIPPED' && (
-        <TouchableOpacity
-          style={[styles.completeButton, { backgroundColor: colors.border }]}
-          onPress={handleComplete}
-        >
-          <Text style.completeButtonText}>Mark Complete ✓</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.completeButton, { backgroundColor: colors.border }]}
+            onPress={handleComplete}
+          >
+            <Text style={styles.completeButtonText}>Mark Complete ✓</Text>
+          </TouchableOpacity>
       )}
     </View>
   );
