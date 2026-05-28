@@ -6,182 +6,14 @@ import {
   SafeAreaView,
   ScrollView,
   TouchableOpacity,
+  TextInput,
   Alert,
   Linking,
   StatusBar,
 } from 'react-native';
-import { databases, ID, config, PROJECT_ID, COLLECTION_IDS } from './lib/appwrite';
 import useTaskState from './useTaskState';
 import seedTasks from './seed_tasks.json';
 
-const DATABASE_ID = config.databaseId;
-const APPWRITE_CONFIG_INCOMPLETE =
-  !DATABASE_ID || DATABASE_ID.includes('YOUR') ||
-  !PROJECT_ID || PROJECT_ID.includes('YOUR') ||
-  !COLLECTION_IDS?.cases ||
-  !COLLECTION_IDS?.phases ||
-  !COLLECTION_IDS?.tasks ||
-  !COLLECTION_IDS?.task_dependencies;
-
-const REQUIRED_COLLECTIONS = [
-  { name: 'cases', id: COLLECTION_IDS.cases },
-  { name: 'phases', id: COLLECTION_IDS.phases },
-  { name: 'tasks', id: COLLECTION_IDS.tasks },
-  { name: 'task_dependencies', id: COLLECTION_IDS.task_dependencies },
-];
-
-async function verifyRequiredCollections() {
-  const missing = [];
-
-  for (const collection of REQUIRED_COLLECTIONS) {
-    try {
-      await databases.listDocuments(DATABASE_ID, collection.id, [], undefined, false, 1);
-    } catch (error) {
-      missing.push({ name: collection.name, id: collection.id });
-    }
-  }
-
-  return missing;
-}
-
-/**
- * Initialize Appwrite Collections from seed data
- * Run once to populate your database with the litigation calendar
- */
-async function initializeAppwriteCollections(setSetupMessage, setSetupMessageType) {
-  try {
-    if (APPWRITE_CONFIG_INCOMPLETE) {
-      const message = 'Update PROJECT_ID and DATABASE_ID in lib/appwrite.js before seeding.';
-      Alert.alert('Appwrite Setup Required', message);
-      setSetupMessage(message);
-      setSetupMessageType('error');
-      return;
-    }
-
-    const missingCollections = await verifyRequiredCollections();
-    if (missingCollections.length > 0) {
-      const missingText = missingCollections
-        .map((collection) => `${collection.name} (${collection.id})`)
-        .join(', ');
-      const message = `Missing or invalid collections: ${missingText}. Create these collections in Appwrite and update lib/appwrite.js if their IDs differ before seeding.`;
-      Alert.alert('Missing Collections', message);
-      setSetupMessage(message);
-      setSetupMessageType('error');
-      return;
-    }
-
-    setSetupMessage('Initializing Appwrite collections...');
-    setSetupMessageType('info');
-    console.log('🔄 Initializing Appwrite collections...');
-
-    // 1. Create Case document
-    const caseDoc = await databases.createDocument(
-      DATABASE_ID,
-      COLLECTION_IDS.cases,
-      'litigation_case_001',
-      {
-        userId: 'user_123',
-        caseNumber: '25-FD-1502 / 135860-F',
-        caseName: 'Smith v. Jones (Modification)',
-        jurisdiction: 'Galveston & Brazoria Counties',
-        status: 'active',
-        description: 'Family law modification case with multi-county coordination.',
-      }
-    );
-    console.log('✓ Case created');
-
-    // 2. Create Phases
-    for (const phase of seedTasks) {
-      await databases.createDocument(
-        DATABASE_ID,
-        COLLECTION_IDS.phases,
-        phase.phaseId,
-        {
-          caseId: 'litigation_case_001',
-          phase: phase.phase_number,
-          title: phase.phase,
-          status: 'pending',
-          targetStartDate: null,
-          targetEndDate: null,
-        }
-      );
-    }
-    console.log('✓ Phases created');
-
-    // 3. Create Tasks
-    for (const phase of seedTasks) {
-      for (const task of phase.tasks) {
-        await databases.createDocument(
-          DATABASE_ID,
-          COLLECTION_IDS.tasks,
-          task.id,
-          {
-            caseId: 'litigation_case_001',
-            phaseId: phase.phaseId,
-            taskNumber: parseInt(task.id.split('_')[1]),
-            title: task.title,
-            description: task.alert_text || '',
-            status: task.status,
-            isConditional: task.is_conditional || false,
-            conditionalLogic: task.activation_condition || task.conditional_skip_if || null,
-            targetDate: task.target_start || task.target_date || null,
-            targetStartTime: task.target_start ? new Date(task.target_start).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : null,
-            targetEndTime: task.target_end ? new Date(task.target_end).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : null,
-            dueDate: task.target_end || task.target_date || null,
-            actionType: task.metadata?.action_type || 'review',
-            contactPhone: task.metadata?.phone || null,
-            contactEmail: task.metadata?.recipient || null,
-            alertReminder: task.alert_text || '',
-            isHighPriority: task.is_high_priority || false,
-            requiresScreenshot: task.metadata?.verification ? true : false,
-            requiresFileUpload: task.requires_artifact || false,
-            notes: JSON.stringify(task.metadata),
-          }
-        );
-      }
-    }
-    console.log('✓ Tasks created');
-
-    // 4. Create Dependencies
-    for (const phase of seedTasks) {
-      for (const task of phase.tasks) {
-        if (task.dependencies && task.dependencies.length > 0) {
-          for (const depId of task.dependencies) {
-            await databases.createDocument(
-              DATABASE_ID,
-              COLLECTION_IDS.task_dependencies,
-              ID.unique(),
-              {
-                taskId: task.id,
-                dependsOnTaskId: depId,
-              }
-            );
-          }
-        }
-      }
-    }
-    console.log('✓ Dependencies created');
-    const totalTasks = seedTasks.reduce((sum, phase) => sum + phase.tasks.length, 0);
-    const totalDependencies = seedTasks.reduce(
-      (sum, phase) => sum + phase.tasks.reduce(
-        (taskSum, task) => taskSum + (task.dependencies ? task.dependencies.length : 0),
-        0
-      ),
-      0
-    );
-    Alert.alert('Success', 'Database initialized with litigation calendar.');
-    setSetupMessage(
-      `Success! Created 1 case, ${seedTasks.length} phases, ${totalTasks} tasks, ${totalDependencies} dependencies.`
-    );
-    setSetupMessageType('success');
-  } catch (error) {
-    console.error('Initialization failed:', error);
-    const message = `Failed to initialize database: ${error?.message || error}`;
-    Alert.alert('Error', message);
-    setSetupMessage(message);
-    setSetupMessageType('error');
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────
 //  Helpers
@@ -196,12 +28,18 @@ function formatTimeWindow(task) {
     return `${dateStr}  •  ${startTime} – ${endTime}`;
   }
   if (task.target_date) {
-    return new Date(task.target_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return parseLocalDate(task.target_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   }
   if (task.target_start) {
       return new Date(task.target_start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
   return '';
+}
+
+function parseLocalDate(dateString) {
+  if (!dateString || dateString.includes('T')) return new Date(dateString);
+  const [year, month, day] = dateString.split('-').map(Number);
+  return new Date(year, month - 1, day);
 }
 
 const STATUS_COLORS = {
@@ -224,6 +62,11 @@ const STATUS_LABELS = {
 
 // ─── Phase colour accents ────────────────────────────────────────
 const PHASE_ACCENTS = ['#EF4444', '#F59E0B', '#A855F7', '#10B981'];
+const VIEW_MODES = [
+  { id: 'today', label: 'Today' },
+  { id: 'upcoming', label: 'Upcoming' },
+  { id: 'phases', label: 'Phases' },
+];
 
 // ═════════════════════════════════════════════════════════════════
 //  TaskCard Component
@@ -414,9 +257,6 @@ export default function App() {
   const [taskData] = useState(seedTasks);
   const taskState = useTaskState(taskData);
   const [expandedPhases, setExpandedPhases] = useState({});
-  const [showSetup, setShowSetup] = useState(false);
-  const [setupMessage, setSetupMessage] = useState(null);
-  const [setupMessageType, setSetupMessageType] = useState('info');
 
   // Initial expand: Phase 1
   useEffect(() => {
@@ -497,39 +337,6 @@ export default function App() {
               ))}
           </View>
         ))}
-
-        {/* ── Setup Section (collapsed by default) ────────────── */}
-        <TouchableOpacity
-          style={styles.setupToggle}
-          onPress={() => setShowSetup(!showSetup)}
-        >
-          <Text style={styles.setupToggleText}>
-            {showSetup ? '▼' : '▶'}  ⚙️ Appwrite Setup
-          </Text>
-        </TouchableOpacity>
-
-        {showSetup && (
-          <View style={styles.setupCard}>
-            <Text style={styles.setupStep}>1. Set PROJECT_ID and DATABASE_ID in lib/appwrite.js</Text>
-            <Text style={styles.setupStep}>2. Create collections: cases, phases, tasks, task_dependencies</Text>
-            <Text style={styles.setupStep}>3. Tap button below to seed data</Text>
-            <TouchableOpacity
-              style={[styles.initButton, APPWRITE_CONFIG_INCOMPLETE && styles.initButtonDisabled]}
-              onPress={() => initializeAppwriteCollections(setSetupMessage, setSetupMessageType)}
-              disabled={APPWRITE_CONFIG_INCOMPLETE}
-            >
-              <Text style={styles.initButtonText}>⚙️  Initialize Appwrite Database</Text>
-            </TouchableOpacity>
-            {setupMessage && (
-              <Text style={[
-                styles.setupStatusText,
-                setupMessageType === 'success' ? styles.setupStatusSuccess : styles.setupStatusError,
-              ]}>
-                {setupMessage}
-              </Text>
-            )}
-          </View>
-        )}
 
         {/* Bottom spacer */}
         <View style={{ height: 40 }} />
@@ -886,57 +693,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#FCD34D',
     fontStyle: 'italic',
-  },
-
-  // ── Setup ────────────────────────────────
-  setupToggle: {
-    paddingVertical: 12,
-    marginBottom: 8,
-  },
-  setupToggleText: {
-    fontSize: 13,
-    color: '#64748B',
-    fontWeight: '600',
-  },
-  setupCard: {
-    backgroundColor: '#1E293B',
-    padding: 14,
-    borderRadius: 10,
-    marginBottom: 16,
-  },
-  setupStep: {
-    fontSize: 12,
-    color: '#94A3B8',
-    marginBottom: 8,
-    lineHeight: 17,
-  },
-  initButton: {
-    backgroundColor: '#1E40AF',
-    padding: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  initButtonDisabled: {
-    backgroundColor: '#374151',
-  },
-  initButtonText: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  setupStatusText: {
-    marginTop: 10,
-    fontSize: 12,
-    lineHeight: 16,
-    textAlign: 'center',
-    color: '#CBD5E1',
-  },
-  setupStatusSuccess: {
-    color: '#4ADE80',
-  },
-  setupStatusError: {
-    color: '#FCA5A5',
   },
 
   // ── Alert Box ────────────────────────────

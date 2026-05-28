@@ -120,6 +120,7 @@
       {
         "id": "task_007",
         "title": "[IF SCENARIO A] Galveston Order is Signed",
+        "target_date": "2026-06-15",
         "activation_condition": "galveston_order_signed == true",
         "action_steps": [
           "Download the signed, file-marked copy from the Galveston portal.",
@@ -140,6 +141,7 @@
       {
         "id": "task_008",
         "title": "[IF SCENARIO B] Prepare for Motion for Continuance Ruling",
+        "target_date": "2026-06-15",
         "activation_condition": "galveston_order_signed == false && current_date >= 2026-06-15",
         "action_steps": [
           "Call the Brazoria coordinator specifically about your pending Motion for Continuance.",

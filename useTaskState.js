@@ -1,4 +1,7 @@
-import { useState, useCallback, useMemo } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useState, useEffect, useCallback } from 'react';
+
+const LOCAL_STATE_KEY = '@smarttodo/local-task-state/v1';
 
 /**
  * useTaskState — Core state-management hook for SmartTodo.
@@ -31,11 +34,64 @@ export default function useTaskState(seedData) {
 
   // ── Sub-item checklists (keyed by task.id → array of booleans) ─
   const [subItemChecks, setSubItemChecks] = useState({});
+  const [taskNotes, setTaskNotes] = useState({});
 
   // ── Global boolean switches that drive conditional logic ───────
   const [globalState, setGlobalState] = useState({
     galveston_order_signed: false,
   });
+
+  const [hasHydrated, setHasHydrated] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLocalState() {
+      try {
+        const savedState = await AsyncStorage.getItem(LOCAL_STATE_KEY);
+        if (!savedState || cancelled) return;
+
+        const parsed = JSON.parse(savedState);
+        if (parsed.taskStatuses && typeof parsed.taskStatuses === 'object') {
+          setTaskStatuses((current) => ({ ...current, ...parsed.taskStatuses }));
+        }
+        if (parsed.subItemChecks && typeof parsed.subItemChecks === 'object') {
+          setSubItemChecks(parsed.subItemChecks);
+        }
+        if (parsed.taskNotes && typeof parsed.taskNotes === 'object') {
+          setTaskNotes(parsed.taskNotes);
+        }
+        if (parsed.globalState && typeof parsed.globalState === 'object') {
+          setGlobalState((current) => ({ ...current, ...parsed.globalState }));
+        }
+      } catch (error) {
+        console.warn('Unable to load local SmartTodo state', error);
+      } finally {
+        if (!cancelled) setHasHydrated(true);
+      }
+    }
+
+    loadLocalState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasHydrated) return;
+
+    const nextState = JSON.stringify({
+      taskStatuses,
+      subItemChecks,
+      taskNotes,
+      globalState,
+    });
+
+    AsyncStorage.setItem(LOCAL_STATE_KEY, nextState).catch((error) => {
+      console.warn('Unable to save local SmartTodo state', error);
+    });
+  }, [hasHydrated, taskStatuses, subItemChecks, taskNotes, globalState]);
 
   // ────────────────────────────────────────────────────────────────
   // Condition evaluator
@@ -53,7 +109,7 @@ export default function useTaskState(seedData) {
         const dateMatch = conditionString.match(/current_date\s*>=\s*(\d{4}-\d{2}-\d{2})/);
         const orderPending = !globalState.galveston_order_signed;
         if (dateMatch) {
-          return orderPending && new Date() >= new Date(dateMatch[1]);
+          return orderPending && startOfLocalDay(new Date()) >= parseLocalDate(dateMatch[1]);
         }
         return orderPending;
       }
@@ -136,8 +192,7 @@ export default function useTaskState(seedData) {
   // Today's priority tasks
   // ────────────────────────────────────────────────────────────────
   const getTodaysPriorityTasks = useCallback(() => {
-    const now = new Date();
-    const todayStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    const today = startOfLocalDay(new Date());
 
     const allTasks = seedData.flatMap((phase) => phase.tasks);
     return allTasks.filter((task) => {
@@ -150,13 +205,46 @@ export default function useTaskState(seedData) {
         // Check if the task's target date is today (or past-due)
         const taskDate = task.target_start || task.target_end || task.target_date;
         if (taskDate) {
-          const taskDay = new Date(taskDate).toISOString().slice(0, 10);
-          if (taskDay <= todayStr) return true;
+          const taskDay = startOfLocalDay(parseLocalDate(taskDate));
+          if (taskDay <= today) return true;
         }
       }
       return false;
     });
   }, [seedData, isTaskVisible, getEffectiveStatus]);
+
+  const getTimelineTasks = useCallback(
+    (mode) => {
+      const today = startOfLocalDay(new Date());
+      const allTasks = seedData.flatMap((phase) =>
+        phase.tasks.map((task) => ({ ...task, phase: phase.phase, phaseId: phase.phaseId })),
+      );
+
+      return allTasks
+        .filter((task) => {
+          if (!isTaskVisible(task)) return false;
+          const status = getEffectiveStatus(task);
+          if (status === 'COMPLETE' || status === 'SKIPPED') return false;
+
+          const taskDate = getTaskDate(task);
+          if (!taskDate) return mode === 'all';
+          const taskDay = startOfLocalDay(parseLocalDate(taskDate));
+
+          if (mode === 'today') return taskDay <= today;
+          if (mode === 'upcoming') return taskDay > today;
+          return true;
+        })
+        .sort((a, b) => {
+          const aDate = getTaskDate(a);
+          const bDate = getTaskDate(b);
+          if (!aDate && !bDate) return a.title.localeCompare(b.title);
+          if (!aDate) return 1;
+          if (!bDate) return -1;
+          return parseLocalDate(aDate) - parseLocalDate(bDate);
+        });
+    },
+    [seedData, isTaskVisible, getEffectiveStatus],
+  );
 
   // ────────────────────────────────────────────────────────────────
   // Case progress (percentage of visible, non-conditional tasks done)
@@ -227,6 +315,10 @@ export default function useTaskState(seedData) {
     });
   }, []);
 
+  const updateTaskNote = useCallback((taskId, note) => {
+    setTaskNotes((prev) => ({ ...prev, [taskId]: note }));
+  }, []);
+
   /** Convenience: flip the galveston_order_signed switch to true */
   const receiveGalvestonOrder = useCallback(() => {
     setGlobalState((prev) => ({ ...prev, galveston_order_signed: true }));
@@ -241,10 +333,13 @@ export default function useTaskState(seedData) {
     setGlobalState,
     taskStatuses,
     subItemChecks,
+    taskNotes,
+    hasHydrated,
 
     // Queries
     getFilteredTasks,
     getTodaysPriorityTasks,
+    getTimelineTasks,
     getCaseProgress,
     getEffectiveStatus,
     isTaskLocked,
@@ -254,6 +349,21 @@ export default function useTaskState(seedData) {
     completeTask,
     toggleTaskProgress,
     toggleSubItem,
+    updateTaskNote,
     receiveGalvestonOrder,
   };
+}
+
+function getTaskDate(task) {
+  return task.target_start || task.target_end || task.target_date || null;
+}
+
+function parseLocalDate(dateString) {
+  if (!dateString || dateString.includes('T')) return new Date(dateString);
+  const [year, month, day] = dateString.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function startOfLocalDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }

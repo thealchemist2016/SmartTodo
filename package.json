@@ -9,13 +9,12 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "appwrite": "^25.0.0",
+    "@react-native-async-storage/async-storage": "^3.1.0",
     "expo": "~56.0.5",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-appwrite": "^0.29.0",
     "react-native-purchases": "^10.0.1",
     "react-native-web": "^0.21.0"
   },
