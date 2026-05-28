@@ -10,25 +10,74 @@ import {
   Linking,
   StatusBar,
 } from 'react-native';
-import { databases, ID } from './lib/appwrite';
+import { databases, ID, config, PROJECT_ID, COLLECTION_IDS } from './lib/appwrite';
 import useTaskState from './useTaskState';
 import seedTasks from './seed_tasks.json';
 
-// UPDATE THIS: Get your Database ID from Appwrite Dashboard → Databases
-const DATABASE_ID = 'YOUR_DATABASE_ID_HERE';  // ← Replace this
+const DATABASE_ID = config.databaseId;
+const APPWRITE_CONFIG_INCOMPLETE =
+  !DATABASE_ID || DATABASE_ID.includes('YOUR') ||
+  !PROJECT_ID || PROJECT_ID.includes('YOUR') ||
+  !COLLECTION_IDS?.cases ||
+  !COLLECTION_IDS?.phases ||
+  !COLLECTION_IDS?.tasks ||
+  !COLLECTION_IDS?.task_dependencies;
+
+const REQUIRED_COLLECTIONS = [
+  { name: 'cases', id: COLLECTION_IDS.cases },
+  { name: 'phases', id: COLLECTION_IDS.phases },
+  { name: 'tasks', id: COLLECTION_IDS.tasks },
+  { name: 'task_dependencies', id: COLLECTION_IDS.task_dependencies },
+];
+
+async function verifyRequiredCollections() {
+  const missing = [];
+
+  for (const collection of REQUIRED_COLLECTIONS) {
+    try {
+      await databases.listDocuments(DATABASE_ID, collection.id, [], undefined, false, 1);
+    } catch (error) {
+      missing.push({ name: collection.name, id: collection.id });
+    }
+  }
+
+  return missing;
+}
 
 /**
  * Initialize Appwrite Collections from seed data
  * Run once to populate your database with the litigation calendar
  */
-async function initializeAppwriteCollections() {
+async function initializeAppwriteCollections(setSetupMessage, setSetupMessageType) {
   try {
+    if (APPWRITE_CONFIG_INCOMPLETE) {
+      const message = 'Update PROJECT_ID and DATABASE_ID in lib/appwrite.js before seeding.';
+      Alert.alert('Appwrite Setup Required', message);
+      setSetupMessage(message);
+      setSetupMessageType('error');
+      return;
+    }
+
+    const missingCollections = await verifyRequiredCollections();
+    if (missingCollections.length > 0) {
+      const missingText = missingCollections
+        .map((collection) => `${collection.name} (${collection.id})`)
+        .join(', ');
+      const message = `Missing or invalid collections: ${missingText}. Create these collections in Appwrite and update lib/appwrite.js if their IDs differ before seeding.`;
+      Alert.alert('Missing Collections', message);
+      setSetupMessage(message);
+      setSetupMessageType('error');
+      return;
+    }
+
+    setSetupMessage('Initializing Appwrite collections...');
+    setSetupMessageType('info');
     console.log('🔄 Initializing Appwrite collections...');
 
     // 1. Create Case document
     const caseDoc = await databases.createDocument(
       DATABASE_ID,
-      'cases',
+      COLLECTION_IDS.cases,
       'litigation_case_001',
       {
         userId: 'user_123',
@@ -45,7 +94,7 @@ async function initializeAppwriteCollections() {
     for (const phase of seedTasks) {
       await databases.createDocument(
         DATABASE_ID,
-        'phases',
+        COLLECTION_IDS.phases,
         phase.phaseId,
         {
           caseId: 'litigation_case_001',
@@ -64,7 +113,7 @@ async function initializeAppwriteCollections() {
       for (const task of phase.tasks) {
         await databases.createDocument(
           DATABASE_ID,
-          'tasks',
+          COLLECTION_IDS.tasks,
           task.id,
           {
             caseId: 'litigation_case_001',
@@ -100,7 +149,7 @@ async function initializeAppwriteCollections() {
           for (const depId of task.dependencies) {
             await databases.createDocument(
               DATABASE_ID,
-              'task_dependencies',
+              COLLECTION_IDS.task_dependencies,
               ID.unique(),
               {
                 taskId: task.id,
@@ -112,10 +161,25 @@ async function initializeAppwriteCollections() {
       }
     }
     console.log('✓ Dependencies created');
+    const totalTasks = seedTasks.reduce((sum, phase) => sum + phase.tasks.length, 0);
+    const totalDependencies = seedTasks.reduce(
+      (sum, phase) => sum + phase.tasks.reduce(
+        (taskSum, task) => taskSum + (task.dependencies ? task.dependencies.length : 0),
+        0
+      ),
+      0
+    );
     Alert.alert('Success', 'Database initialized with litigation calendar.');
+    setSetupMessage(
+      `Success! Created 1 case, ${seedTasks.length} phases, ${totalTasks} tasks, ${totalDependencies} dependencies.`
+    );
+    setSetupMessageType('success');
   } catch (error) {
     console.error('Initialization failed:', error);
-    Alert.alert('Error', 'Failed to initialize database. Check console.');
+    const message = `Failed to initialize database: ${error?.message || error}`;
+    Alert.alert('Error', message);
+    setSetupMessage(message);
+    setSetupMessageType('error');
   }
 }
 
@@ -351,6 +415,8 @@ export default function App() {
   const taskState = useTaskState(taskData);
   const [expandedPhases, setExpandedPhases] = useState({});
   const [showSetup, setShowSetup] = useState(false);
+  const [setupMessage, setSetupMessage] = useState(null);
+  const [setupMessageType, setSetupMessageType] = useState('info');
 
   // Initial expand: Phase 1
   useEffect(() => {
@@ -444,13 +510,24 @@ export default function App() {
 
         {showSetup && (
           <View style={styles.setupCard}>
-            <Text style={styles.setupStep}>1. Update DATABASE_ID in App.js line 17</Text>
-            <Text style={styles.setupStep}>2. Update Project ID in lib/appwrite.js</Text>
-            <Text style={styles.setupStep}>3. Create collections: cases, phases, tasks, task_dependencies</Text>
-            <Text style={styles.setupStep}>4. Tap button below to seed data</Text>
-            <TouchableOpacity style={styles.initButton} onPress={initializeAppwriteCollections}>
+            <Text style={styles.setupStep}>1. Set PROJECT_ID and DATABASE_ID in lib/appwrite.js</Text>
+            <Text style={styles.setupStep}>2. Create collections: cases, phases, tasks, task_dependencies</Text>
+            <Text style={styles.setupStep}>3. Tap button below to seed data</Text>
+            <TouchableOpacity
+              style={[styles.initButton, APPWRITE_CONFIG_INCOMPLETE && styles.initButtonDisabled]}
+              onPress={() => initializeAppwriteCollections(setSetupMessage, setSetupMessageType)}
+              disabled={APPWRITE_CONFIG_INCOMPLETE}
+            >
               <Text style={styles.initButtonText}>⚙️  Initialize Appwrite Database</Text>
             </TouchableOpacity>
+            {setupMessage && (
+              <Text style={[
+                styles.setupStatusText,
+                setupMessageType === 'success' ? styles.setupStatusSuccess : styles.setupStatusError,
+              ]}>
+                {setupMessage}
+              </Text>
+            )}
           </View>
         )}
 
@@ -840,10 +917,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
+  initButtonDisabled: {
+    backgroundColor: '#374151',
+  },
   initButtonText: {
     color: '#FFF',
     fontSize: 13,
     fontWeight: '700',
+  },
+  setupStatusText: {
+    marginTop: 10,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+    color: '#CBD5E1',
+  },
+  setupStatusSuccess: {
+    color: '#4ADE80',
+  },
+  setupStatusError: {
+    color: '#FCA5A5',
   },
 
   // ── Alert Box ────────────────────────────
